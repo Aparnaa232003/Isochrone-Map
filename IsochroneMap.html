@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, user-scalable=yes">
+    <title>Isochrone Map</title>
+    <script src="https://unpkg.com/@deck.gl/core@8.6.0/dist.min.js"></script>
+    <script src="https://unpkg.com/@deck.gl/layers@8.6.0/dist.min.js"></script>
+    <script src="https://unpkg.com/@deck.gl/geo-layers@8.6.0/dist/min.js"></script>
+    <script src="https://unpkg.com/maplibre-gl@2.1.8/dist/maplibre-gl.js"></script>
+    <link href="https://unpkg.com/maplibre-gl@2.1.8/dist/maplibre-gl.css" rel="stylesheet"/>
+    <style>
+        body {
+            margin: 0;
+            height: 100vh;
+            overflow: hidden;
+        }
+        #map {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100vh;
+        }
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: white;
+            padding: 10px;
+            z-index: 1;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+<div id="controls">
+    <label for="location">Enter Location:</label>
+    <input type="text" id="location" placeholder="Type a location">
+    
+    <label for="transport-mode">Transport Mode:</label>
+    <select id="transport-mode">
+        <option value="driving-car">Driving</option>
+        <option value="cycling-regular">Cycling</option>
+        <option value="foot-walking">Walking</option>
+    </select>
+
+    <label>Interval:</label>
+    <input type="number" id="interval" placeholder="Enter value" min="1" value="30">
+    <select id="interval-unit">
+        <option value="minutes">Minutes</option>
+        <option value="kilometers">Kilometers</option>
+    </select>
+    
+    <button id="show-button">Show on Map</button>
+</div>
+<div id="map"></div>
+
+<script>
+    const GEOAPIFY_API_KEY = '0a29c79b65bc46f0b10a68d56a07fe17';
+    const OPENROUTESERVICE_API_KEY = '5b3ce3597851110001cf62488366b00f21bb47dead333a79d67b6094';
+
+    function initializeMap(center) {
+        const maplibreMap = new maplibregl.Map({
+            container: 'map',
+            style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+            center: center,
+            zoom: 5
+        });
+
+        const deckMap = new deck.DeckGL({
+            container: 'map',
+            mapStyle: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+            initialViewState: { longitude: center[0], latitude: center[1], zoom: 5 },
+            controller: true
+            //controller: new deck.MapController()
+        });
+
+        maplibreMap.on('move', () => {
+            const { lng, lat } = maplibreMap.getCenter();
+            deckMap.setProps({ viewState: { longitude: lng, latitude: lat, zoom: maplibreMap.getZoom() } });
+        });
+
+        document.getElementById("show-button").addEventListener("click", async () => {
+            const location = document.getElementById("location").value;
+            const transportMode = document.getElementById("transport-mode").value;
+            const intervalValue = parseInt(document.getElementById("interval").value) || 30;
+            const intervalUnit = document.getElementById("interval-unit").value;
+
+            if (!location) {
+                alert("Please enter a location.");
+                return;
+            }
+            //encodeURIComponent
+            const geoapifyResponse = await fetch(`https://api.geoapify.com/v1/geocode/search?text=${(location)}&apiKey=${GEOAPIFY_API_KEY}`);
+            const geoapifyData = await geoapifyResponse.json();
+            if (!geoapifyData.features.length) {
+                alert("Location not found.");
+                return;
+            }
+
+            const [longitude, latitude] = geoapifyData.features[0].geometry.coordinates;
+            console.log(geoapifyData.features);
+            let range;
+            if (intervalUnit === "minutes") {
+                range = [intervalValue * 60];
+                if(intervalValue>60){
+                    alert("The value should be 60 or less");
+                    return;
+             } 
+            } else {
+        
+                const speed = transportMode === "driving-car" ? 100 : transportMode === "cycling-regular" ? 15 : 5;
+                const timeInSeconds = (intervalValue / speed) * 3600;
+
+                if(intervalValue>60){
+                    alert("The value should be 60 or less");
+                    return;}
+                range = [timeInSeconds];
+            }
+
+            const orsResponse = await fetch(`https://api.openrouteservice.org/v2/isochrones/${transportMode}`, {
+                method: "POST",
+                headers: {
+                    "Authorization": OPENROUTESERVICE_API_KEY,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    locations: [[longitude, latitude]],
+                    range: range
+                })
+            });
+            const orsData = await orsResponse.json();
+
+            const isochroneLayer = new deck.GeoJsonLayer({
+                id: 'isochrone-layer',
+                data: orsData,
+                filled: true,
+                stroked: true,
+                lineWidthMinPixels: 2,
+                getFillColor: [255, 100, 100, 100],
+                getLineColor: [255, 0, 0]
+            });
+
+            const locationMarkerLayer = new deck.ScatterplotLayer({
+                id: 'location-marker-layer',
+                data: [{ position: [longitude, latitude] }],
+                getRadius: 100,
+                getFillColor: [0, 255, 0],
+                radiusMinPixels: 10
+            });
+
+            deckMap.setProps({ layers: [isochroneLayer, locationMarkerLayer], viewState: { longitude, latitude, zoom: 12 } });
+            maplibreMap.setCenter([longitude, latitude]);
+            maplibreMap.setZoom(12);
+        });
+
+        maplibreMap.addControl(new maplibregl.NavigationControl(), 'top-right');
+    }
+
+    initializeMap([78.8718,21.7679]); 
+</script>
+</body>
+</html>
